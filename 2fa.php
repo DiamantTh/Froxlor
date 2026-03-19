@@ -37,6 +37,7 @@ use Froxlor\UI\Request;
 use Froxlor\UI\Response;
 use Froxlor\PhpHelper;
 use Froxlor\User;
+use Froxlor\WebAuthn\FroxlorWebAuthn;
 
 if (Settings::Get('2fa.enabled') != '1') {
 	Response::dynamicError('2fa.2fa_not_activated');
@@ -62,12 +63,50 @@ if ($action == 'delete') {
 		'd2fa' => "",
 		'id' => $uid
 	]);
+	// remove all WebAuthn credentials for this user if FIDO2 was active
+	if ($userinfo['type_2fa'] == 3) {
+		$userid_type = (AREA == 'admin') ? 'admin' : 'customer';
+		$del_cred_stmt = Database::prepare("DELETE FROM `" . TABLE_PANEL_WEBAUTHN_CREDENTIALS . "` WHERE `userid` = :uid AND `userid_type` = :utype");
+		Database::pexecute($del_cred_stmt, ['uid' => $uid, 'utype' => $userid_type]);
+	}
 	Response::standardSuccess('2fa.2fa_removed');
+} elseif ($action == 'webauthn_delete_credential') {
+	// Delete a single registered FIDO2 credential
+	if ($userinfo['type_2fa'] != 3) {
+		Response::dynamicError('2fa.2fa_not_activated_for_user');
+	}
+	$credId = (int)Request::post('credential_id');
+	$userid_type = (AREA == 'admin') ? 'admin' : 'customer';
+	$del_stmt = Database::prepare("DELETE FROM `" . TABLE_PANEL_WEBAUTHN_CREDENTIALS . "` WHERE `id` = :id AND `userid` = :uid AND `userid_type` = :utype");
+	Database::pexecute($del_stmt, ['id' => $credId, 'uid' => $uid, 'utype' => $userid_type]);
+
+	// If no credentials left, reset type_2fa to 0
+	$count_stmt = Database::prepare("SELECT COUNT(*) FROM `" . TABLE_PANEL_WEBAUTHN_CREDENTIALS . "` WHERE `userid` = :uid AND `userid_type` = :utype");
+	$count = (int)Database::pexecute_first($count_stmt, ['uid' => $uid, 'utype' => $userid_type])['COUNT(*)'];
+	if ($count === 0) {
+		Database::pexecute($upd_stmt, ['t2fa' => 0, 'd2fa' => '', 'id' => $uid]);
+	}
+	Response::standardSuccess('2fa.2fa_key_removed');
 } elseif ($action == 'preadd') {
 	$type = Request::post('type_2fa', '0');
 
 	$data = "";
 	if ($type > 0) {
+		// FIDO2/WebAuthn: do NOT save type_2fa=3 yet – that happens automatically
+		// in ajax.php after the first credential is registered. Just render the
+		// registration UI so the user can add their first key via AJAX.
+		if ($type == 3) {
+			UI::twig()->addGlobal('userinfo', $userinfo);
+			$log->logAction(FroxlorLogger::USR_ACTION, LOG_NOTICE, "viewed 2fa::fido2 setup");
+			UI::view('user/2fa.html.twig', [
+				'type_select_values' => [],
+				'ga_qrcode' => '',
+				'webauthn_credentials' => [],
+				'webauthn_setup' => true,
+			]);
+			exit();
+		}
+
 		// generate secret for TOTP
 		$data = $tfa->createSecret();
 
@@ -134,12 +173,15 @@ $log->logAction(FroxlorLogger::USR_ACTION, LOG_NOTICE, "viewed 2fa::overview");
 
 $type_select_values = [];
 $ga_qrcode = '';
+$webauthn_credentials = [];
+
 if ($userinfo['type_2fa'] == '0') {
 	// available types
 	$type_select_values = [
 		0 => '-',
 		1 => 'E-Mail',
-		2 => 'Authenticator'
+		2 => 'Authenticator',
+		3 => 'FIDO2 / Passkey'
 	];
 	asort($type_select_values);
 } elseif ($userinfo['type_2fa'] == '1') {
@@ -147,9 +189,16 @@ if ($userinfo['type_2fa'] == '0') {
 } elseif ($userinfo['type_2fa'] == '2') {
 	// authenticator 2fa enabled
 	$ga_qrcode = $tfa->getQRCodeImageAsDataUri($userinfo['loginname'], $userinfo['data_2fa']);
+} elseif ($userinfo['type_2fa'] == '3') {
+	// FIDO2/WebAuthn enabled — load registered credentials
+	$userid_type = (AREA == 'admin') ? 'admin' : 'customer';
+	$cred_stmt = Database::prepare("SELECT `id`, `name`, `created_at` FROM `" . TABLE_PANEL_WEBAUTHN_CREDENTIALS . "` WHERE `userid` = :uid AND `userid_type` = :utype ORDER BY `created_at` ASC");
+	$cred_result = Database::pexecute($cred_stmt, ['uid' => $uid, 'utype' => $userid_type]);
+	$webauthn_credentials = $cred_result->fetchAll(PDO::FETCH_ASSOC);
 }
 
 UI::view('user/2fa.html.twig', [
 	'type_select_values' => $type_select_values,
-	'ga_qrcode' => $ga_qrcode
+	'ga_qrcode' => $ga_qrcode,
+	'webauthn_credentials' => $webauthn_credentials,
 ]);

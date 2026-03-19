@@ -59,3 +59,4 @@ const TABLE_PANEL_USERCOLUMNS = 'panel_usercolumns';
 const TABLE_PANEL_LOGINLINKS = 'panel_loginlinks';
 const TABLE_PANEL_2FA_TOKENS = 'panel_2fa_tokens';
 const TABLE_PANEL_USER_SSHKEYS = 'panel_sshkeys';
+const TABLE_PANEL_WEBAUTHN_CREDENTIALS = 'panel_webauthn_credentials';
