@@ -42,7 +42,6 @@ use Froxlor\UI\Request;
 use Froxlor\UI\Response;
 use Froxlor\User;
 use Froxlor\Validate\Validate;
-use Froxlor\WebAuthn\FroxlorWebAuthn;
 
 if ($action == '') {
 	$action = 'login';
@@ -192,176 +191,6 @@ if ($action == '2fa_entercode') {
 		'action' => '2fa_entercode',
 		'showmessage' => '1'
 	]);
-	exit();
-} elseif ($action == 'fido2_entercode') {
-	// Page shown after password login when user has type_2fa = 3 (FIDO2)
-	if (!isset($_SESSION['uid_2fa'])) {
-		Response::redirectTo('index.php');
-		exit();
-	}
-	$smessage = (int)Request::get('showmessage', 0);
-	$message = "";
-	if ($smessage > 0) {
-		$message = lng('error.2fa_wrongcode');
-	}
-	UI::view('login/enter_fido2.html.twig', [
-		'pagetitle' => lng('login.2fa'),
-		'message' => $message,
-		'remember_me' => (Settings::Get('panel.db_version') >= 202407200) ? true : false,
-	]);
-	exit();
-} elseif ($action == 'fido2_get_args') {
-	// AJAX: return WebAuthn assertion options (challenge + allowed credentials)
-	if (!isset($_SESSION['uid_2fa'])) {
-		header('Content-Type: application/json');
-		echo json_encode(['error' => 'No active login session']);
-		exit();
-	}
-
-	$uid = $_SESSION['uid_2fa'];
-	$userid_type = $_SESSION['unfo_2fa'] ? 'admin' : 'customer';
-
-	$cred_stmt = Database::prepare("SELECT `credential_id` FROM `" . TABLE_PANEL_WEBAUTHN_CREDENTIALS . "` WHERE `userid` = :uid AND `userid_type` = :utype");
-	$cred_rows = Database::pexecute($cred_stmt, ['uid' => $uid, 'utype' => $userid_type]);
-	$credentialIds = array_column($cred_rows->fetchAll(PDO::FETCH_ASSOC), 'credential_id');
-
-	if (empty($credentialIds)) {
-		header('Content-Type: application/json');
-		echo json_encode(['error' => 'No credentials registered']);
-		exit();
-	}
-
-	try {
-		$webAuthn = new FroxlorWebAuthn();
-		$getArgs = $webAuthn->getGetArgs($credentialIds);
-		$_SESSION['webauthn_challenge'] = $webAuthn->getChallenge();
-		header('Content-Type: application/json');
-		echo json_encode($getArgs);
-	} catch (Exception $e) {
-		header('Content-Type: application/json');
-		echo json_encode(['error' => $e->getMessage()]);
-	}
-	exit();
-} elseif ($action == 'fido2_verify') {
-	// Verify FIDO2 assertion after navigator.credentials.get()
-	if (!isset($_SESSION['uid_2fa']) || !isset($_SESSION['webauthn_challenge'])) {
-		header('Content-Type: application/json');
-		echo json_encode(['error' => 'No active session']);
-		exit();
-	}
-
-	$uid = $_SESSION['uid_2fa'];
-	$userid_type = $_SESSION['unfo_2fa'] ? 'admin' : 'customer';
-	$table = $_SESSION['uidtable_2fa'];
-	$uidfield = $_SESSION['uidfield_2fa'];
-	$challenge = $_SESSION['webauthn_challenge'];
-	$isadmin = $_SESSION['unfo_2fa'];
-
-	$clientDataJSON = Request::post('clientDataJSON', '');
-	$authenticatorData = Request::post('authenticatorData', '');
-	$signature = Request::post('signature', '');
-	$userHandle = Request::post('userHandle', '');
-	$credentialId = Request::post('id', '');
-	$remember = Request::post('2fa_remember', '0');
-
-	// Look up the credential
-	$cred_stmt = Database::prepare("SELECT * FROM `" . TABLE_PANEL_WEBAUTHN_CREDENTIALS . "` WHERE `credential_id` = :cid AND `userid` = :uid AND `userid_type` = :utype");
-	$credential = Database::pexecute_first($cred_stmt, ['cid' => $credentialId, 'uid' => $uid, 'utype' => $userid_type]);
-
-	if (!$credential) {
-		// Credential not found – treat as wrong authentication
-		header('Content-Type: application/json');
-		echo json_encode(['error' => 'Unknown credential']);
-		exit();
-	}
-
-	$success = false;
-	try {
-		$webAuthn = new FroxlorWebAuthn();
-		$newSignCount = $webAuthn->processGet(
-			$clientDataJSON,
-			$authenticatorData,
-			$signature,
-			$userHandle,
-			$credential['public_key'],
-			$challenge,
-			(int)$credential['sign_count']
-		);
-		// Update sign-count
-		$upd_stmt = Database::prepare("UPDATE `" . TABLE_PANEL_WEBAUTHN_CREDENTIALS . "` SET `sign_count` = :sc WHERE `id` = :id");
-		Database::pexecute($upd_stmt, ['sc' => $newSignCount, 'id' => $credential['id']]);
-		$success = true;
-	} catch (Exception $e) {
-		$rstlog = FroxlorLogger::getInstanceOf(['loginname' => $_SERVER['REMOTE_ADDR']]);
-		$rstlog->logAction(FroxlorLogger::LOGIN_ACTION, LOG_WARNING, "FIDO2 assertion failed: " . $e->getMessage());
-	}
-
-	if (!$success) {
-		// Increment fail count
-		$fail_stmt = Database::prepare("UPDATE " . $table . " SET `lastlogin_fail`= :lf, `loginfail_count`=`loginfail_count`+1 WHERE `" . $uidfield . "`= :uid");
-		Database::pexecute($fail_stmt, ['lf' => time(), 'uid' => $uid]);
-		$fail_data = Database::pexecute_first(
-			Database::prepare("SELECT `loginname`, `loginfail_count` FROM " . $table . " WHERE `" . $uidfield . "`= :uid"),
-			['uid' => $uid]
-		);
-		if ($fail_data && $fail_data['loginfail_count'] >= Settings::Get('login.maxloginattempts')) {
-			header('Content-Type: application/json');
-			echo json_encode(['redirect' => 'index.php?showmessage=3']);
-			exit();
-		}
-		header('Content-Type: application/json');
-		echo json_encode(['error' => 'Authentication failed', 'redirect' => 'index.php?action=fido2_entercode&showmessage=1']);
-		exit();
-	}
-
-	// Fetch full user record for finishLogin
-	$sel_stmt = Database::prepare("SELECT * FROM " . $table . " WHERE `" . $uidfield . "` = :uid");
-	$userinfo = Database::pexecute_first($sel_stmt, ['uid' => $uid]);
-	if (empty($userinfo)) {
-		header('Content-Type: application/json');
-		echo json_encode(['error' => 'User not found', 'redirect' => 'index.php?showmessage=2']);
-		exit();
-	}
-	$userinfo['adminsession'] = $isadmin;
-	$userinfo['userid'] = $uid;
-
-	// Handle remember-me for FIDO2 (reuse same panel_2fa_tokens table)
-	if ($remember && Settings::Get('panel.db_version') >= 202407200) {
-		$selector = base64_encode(Froxlor::genSessionId(9));
-		$authenticator = Froxlor::genSessionId(33);
-		$valid_until = time() + 60 * 60 * 24 * 30;
-		$ins_stmt = Database::prepare("
-			INSERT INTO `" . TABLE_PANEL_2FA_TOKENS . "` SET
-			`selector` = :selector,
-			`token` = :authenticator,
-			`userid` = :userid,
-			`valid_until` = :valid_until
-		");
-		Database::pexecute($ins_stmt, [
-			'selector'      => $selector,
-			'authenticator' => hash('sha256', $authenticator),
-			'userid'        => $uid,
-			'valid_until'   => $valid_until,
-		]);
-		$cookie_params = [
-			'expires'  => $valid_until,
-			'path'     => '/',
-			'domain'   => UI::getCookieHost(),
-			'secure'   => UI::requestIsHttps(),
-			'httponly' => true,
-			'samesite' => 'Strict',
-		];
-		setcookie('frx_2fa_remember', $selector . ':' . base64_encode($authenticator), $cookie_params);
-	}
-
-	unset($_SESSION['webauthn_challenge']);
-
-	header('Content-Type: application/json');
-	if (!finishLogin($userinfo)) {
-		echo json_encode(['error' => 'Login failed', 'redirect' => 'index.php?showmessage=2']);
-	} else {
-		echo json_encode(['success' => true]);
-	}
 	exit();
 } elseif ($action == 'login') {
 	if (!empty($_POST)) {
@@ -553,21 +382,6 @@ if ($action == '2fa_entercode') {
 		// 2FA activated
 		if (Settings::Get('2fa.enabled') == '1' && $userinfo['type_2fa'] > 0) {
 
-			// Safeguard: if FIDO2 is set but no credentials are registered, skip 2FA
-			if ($userinfo['type_2fa'] == 3) {
-				$cred_check = Database::pexecute_first(
-					Database::prepare("SELECT COUNT(*) AS cnt FROM `" . TABLE_PANEL_WEBAUTHN_CREDENTIALS . "` WHERE `userid` = :uid AND `userid_type` = :utype"),
-					['uid' => $userinfo[$uid], 'utype' => $is_admin ? 'admin' : 'customer']
-				);
-				if (empty($cred_check['cnt'])) {
-					// No credentials registered – proceed without 2FA
-					if (!finishLogin($userinfo)) {
-						Response::redirectTo('index.php', ['showmessage' => '2']);
-					}
-					exit();
-				}
-			}
-
 			// check for remember cookie
 			if (!empty($_COOKIE['frx_2fa_remember'])) {
 				list($selector, $authenticator) = explode(':', $_COOKIE['frx_2fa_remember']);
@@ -592,13 +406,6 @@ if ($action == '2fa_entercode') {
 			$_SESSION['uidfield_2fa'] = $uid;
 			$_SESSION['uidtable_2fa'] = $table;
 			$_SESSION['unfo_2fa'] = $is_admin;
-			// For FIDO2 type the secret field is not needed; skip email sending
-			if ($userinfo['type_2fa'] == 3) {
-				Response::redirectTo('index.php', [
-					'action' => 'fido2_entercode'
-				]);
-				exit();
-			}
 			// send mail if type_2fa = 1 (email)
 			if ($userinfo['type_2fa'] == 1) {
 				// generate code

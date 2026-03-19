@@ -41,7 +41,6 @@ use Froxlor\UI\Panel\UI;
 use Froxlor\UI\Request;
 use Froxlor\UI\Response;
 use Froxlor\Validate\Validate;
-use Froxlor\WebAuthn\FroxlorWebAuthn;
 
 class Ajax
 {
@@ -87,10 +86,6 @@ class Ajax
 				return $this->getConfigJsonExport();
 			case 'loadLanguageString':
 				return $this->loadLanguageString();
-			case 'webauthn_register_begin':
-				return $this->webAuthnRegisterBegin();
-			case 'webauthn_register_complete':
-				return $this->webAuthnRegisterComplete();
 			default:
 				return $this->errorResponse('Action not found!');
 		}
@@ -388,95 +383,5 @@ class Ajax
 			return $this->jsonResponse(lng($langid));
 		}
 		return $this->errorResponse('Invalid identifier: ' . $langid, 406);
-	}
-
-	/**
-	 * Begin WebAuthn credential registration.
-	 * Returns PublicKeyCredentialCreationOptions as JSON.
-	 */
-	private function webAuthnRegisterBegin()
-	{
-		if (Settings::Get('2fa.enabled') != '1') {
-			return $this->errorResponse('2FA not enabled', 403);
-		}
-
-		$isAdmin = isset($this->userinfo['adminsession']) && $this->userinfo['adminsession'] == 1;
-		$userId = $isAdmin ? (int)$this->userinfo['adminid'] : (int)$this->userinfo['customerid'];
-		$userName = $this->userinfo['loginname'];
-		$displayName = trim(($this->userinfo['firstname'] ?? '') . ' ' . ($this->userinfo['name'] ?? '')) ?: $userName;
-		$userid_type = $isAdmin ? 'admin' : 'customer';
-
-		// Collect already-registered credential IDs so the browser can exclude them
-		$cred_stmt = Database::prepare("SELECT `credential_id` FROM `" . TABLE_PANEL_WEBAUTHN_CREDENTIALS . "` WHERE `userid` = :uid AND `userid_type` = :utype");
-		$cred_rows = Database::pexecute($cred_stmt, ['uid' => $userId, 'utype' => $userid_type]);
-		$existingIds = array_column($cred_rows->fetchAll(PDO::FETCH_ASSOC), 'credential_id');
-
-		try {
-			$webAuthn = new FroxlorWebAuthn();
-			$createArgs = $webAuthn->getCreateArgs($userId, $userName, $displayName, $existingIds);
-			$_SESSION['webauthn_reg_challenge'] = $webAuthn->getChallenge();
-			return $this->jsonResponse($createArgs);
-		} catch (Exception $e) {
-			return $this->errorResponse($e->getMessage());
-		}
-	}
-
-	/**
-	 * Complete WebAuthn credential registration.
-	 * Verifies the attestation and stores the new credential.
-	 */
-	private function webAuthnRegisterComplete()
-	{
-		if (Settings::Get('2fa.enabled') != '1') {
-			return $this->errorResponse('2FA not enabled', 403);
-		}
-
-		if (empty($_SESSION['webauthn_reg_challenge'])) {
-			return $this->errorResponse('No registration challenge in session', 400);
-		}
-
-		$clientDataJSON    = Request::post('clientDataJSON', '');
-		$attestationObject = Request::post('attestationObject', '');
-		$keyName           = trim(Request::post('key_name', '')) ?: 'Security Key';
-		$challenge         = $_SESSION['webauthn_reg_challenge'];
-		unset($_SESSION['webauthn_reg_challenge']);
-
-		$isAdmin = isset($this->userinfo['adminsession']) && $this->userinfo['adminsession'] == 1;
-		$userId = $isAdmin ? (int)$this->userinfo['adminid'] : (int)$this->userinfo['customerid'];
-		$userid_type = $isAdmin ? 'admin' : 'customer';
-
-		// Sanitise key name
-		$keyName = mb_substr(htmlspecialchars($keyName, ENT_QUOTES, 'UTF-8'), 0, 100);
-
-		try {
-			$webAuthn = new FroxlorWebAuthn();
-			$credential = $webAuthn->processCreate($clientDataJSON, $attestationObject, $challenge);
-		} catch (Exception $e) {
-			return $this->errorResponse('Registration failed: ' . $e->getMessage());
-		}
-
-		// Persist the credential
-		$ins_stmt = Database::prepare("
-			INSERT INTO `" . TABLE_PANEL_WEBAUTHN_CREDENTIALS . "`
-			(`userid`, `userid_type`, `credential_id`, `public_key`, `sign_count`, `name`, `created_at`)
-			VALUES (:uid, :utype, :cid, :pk, :sc, :name, :ts)
-		");
-		Database::pexecute($ins_stmt, [
-			'uid'   => $userId,
-			'utype' => $userid_type,
-			'cid'   => $credential->credentialId,
-			'pk'    => $credential->publicKey,
-			'sc'    => $credential->signCount,
-			'name'  => $keyName,
-			'ts'    => time(),
-		]);
-
-		// Activate FIDO2 as the user's 2FA method if not already set
-		$user_table = $isAdmin ? TABLE_PANEL_ADMINS : TABLE_PANEL_CUSTOMERS;
-		$user_field = $isAdmin ? 'adminid' : 'customerid';
-		$upd_stmt = Database::prepare("UPDATE `" . $user_table . "` SET `type_2fa` = 3, `data_2fa` = '' WHERE `" . $user_field . "` = :uid");
-		Database::pexecute($upd_stmt, ['uid' => $userId]);
-
-		return $this->jsonResponse(['success' => true, 'key_name' => $keyName]);
 	}
 }

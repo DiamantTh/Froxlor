@@ -1,192 +1,62 @@
 {% extends "Froxlor/userarea.html.twig" %}
 
 {% block content %}
-<div class="container">
-<div class="row justify-content-center">
-{% if userinfo.type_2fa == 0 %}
-{% set linkeraction = 'preadd' %}
-{% elseif userinfo['2fa_unsaved'] is defined and userinfo['2fa_unsaved'] %}
-{% set linkeraction = 'add' %}
-{% else %}
-{% set linkeraction = 'delete' %}
-{% endif %}
+	<div class="container">
+		<div class="row justify-content-center">
+			{% if userinfo.type_2fa == 0 %}
+				{% set linkeraction = 'preadd' %}
+			{% elseif userinfo['2fa_unsaved'] is defined and userinfo['2fa_unsaved'] %}
+				{% set linkeraction = 'add' %}
+			{% else %}
+				{% set linkeraction = 'delete' %}
+			{% endif %}
+			<form action="{{ linker({'section':'index','action':linkeraction}) }}" class="col-12 max-w-420 d-flex flex-column" method="post" enctype="application/x-www-form-urlencoded">
+				<div class="card shadow">
+					<div class="card-body">
+						<h5 class="card-title">{{ lng('login.2fa') }}</h5>
 
-{% if userinfo.type_2fa != 3 %}
-<form action="{{ linker({'section':'index','action':linkeraction}) }}" class="col-12 max-w-420 d-flex flex-column" method="post" enctype="application/x-www-form-urlencoded">
-<div class="card shadow">
-<div class="card-body">
-<h5 class="card-title">{{ lng('login.2fa') }}</h5>
+						<div>
+							{% if userinfo.type_2fa == 0 %}
+								<label for="type_2fa" class="col-form-label">{{ lng('2fa.2fa_overview_desc')|raw }}</label>
+								<select class="form-select" name="type_2fa" id="type_2fa" required>
+									{% for val,opt in type_select_values %}
+										<option value="{{ val }}">{{ opt }}</option>
+									{% endfor %}
+								</select>
 
-<div>
-{% if userinfo.type_2fa == 0 %}
-<label for="type_2fa" class="col-form-label">{{ lng('2fa.2fa_overview_desc')|raw }}</label>
-<select class="form-select" name="type_2fa" id="type_2fa" required>
-{% for val,opt in type_select_values %}
-<option value="{{ val }}">{{ opt }}</option>
-{% endfor %}
-</select>
+							{% elseif userinfo.type_2fa == 2 %}
+								<label for="qrcode" class="col-form-label">{{ lng('2fa.2fa_ga_desc')|raw }}</label>
+								<img src="{{ ga_qrcode }}" class="img-fluid" alt="QRCode" id="qrcode"/><br>
+								<span>Code: <code>{{ userinfo.data_2fa }}</code></span>
+							{% endif %}
 
-{% elseif userinfo.type_2fa == 2 %}
-<label for="qrcode" class="col-form-label">{{ lng('2fa.2fa_ga_desc')|raw }}</label>
-<img src="{{ ga_qrcode }}" class="img-fluid" alt="QRCode" id="qrcode"/><br>
-<span>Code: <code>{{ userinfo.data_2fa }}</code></span>
-{% endif %}
+							{% if userinfo['2fa_unsaved'] is defined and userinfo['2fa_unsaved'] %}
+							<br>
+							<label for="codevalidation" class="col-form-label">{{ lng('login.2facode') }}</label>
+							<input type="text" name="codevalidation" id="codevalidation" class="form-control" required/>
+							<input type="hidden" name="type_2fa" id="type_2fa" value="{{ userinfo.type_2fa }}"/>
+							<input type="hidden" name="data_2fa" id="data_2fa" value="{{ userinfo.data_2fa }}"/>
+							{% endif %}
+						</div>
+					</div>
 
-{% if userinfo['2fa_unsaved'] is defined and userinfo['2fa_unsaved'] %}
-<br>
-<label for="codevalidation" class="col-form-label">{{ lng('login.2facode') }}</label>
-<input type="text" name="codevalidation" id="codevalidation" class="form-control" required/>
-<input type="hidden" name="type_2fa" id="type_2fa" value="{{ userinfo.type_2fa }}"/>
-<input type="hidden" name="data_2fa" id="data_2fa" value="{{ userinfo.data_2fa }}"/>
-{% endif %}
-</div>
-</div>
-
-<div class="card-body d-grid gap-2">
-<input type="hidden" name="csrf_token" value="{{ csrf_token }}"/>
-<input type="hidden" name="page" value="{{ page }}"/>
-<input type="hidden" name="send" value="send"/>
-{% if userinfo.type_2fa == 0 %}
-<button class="btn btn-primary" type="submit" name="preadd">
-{{ lng('2fa.2fa_add') }}</button>
-{% elseif userinfo['2fa_unsaved'] is defined and userinfo['2fa_unsaved'] %}
-<button class="btn btn-primary" type="submit" name="add">
-{{ lng('2fa.2fa_add') }}</button>
-{% else %}
-<button class="btn btn-warning" type="submit" name="delete">
-{{ lng('2fa.2fa_delete') }}</button>
-{% endif %}
-</div>
-</div>
-</form>
-{% endif %}
-
-{% if userinfo.type_2fa == 3 or webauthn_setup is defined and webauthn_setup %}
-{# FIDO2 / WebAuthn management #}
-<div class="col-12 max-w-600 d-flex flex-column gap-3">
-<div class="card shadow">
-<div class="card-body">
-<h5 class="card-title">{{ lng('login.2fa') }} &mdash; {{ lng('2fa.2fa_fido2_title') }}</h5>
-<p>{{ lng('2fa.2fa_fido2_desc')|raw }}</p>
-
-{% if webauthn_credentials is not empty %}
-<h6 class="mt-3">{{ lng('2fa.2fa_fido2_registered_keys') }}</h6>
-<ul class="list-group mb-3">
-{% for cred in webauthn_credentials %}
-<li class="list-group-item d-flex justify-content-between align-items-center">
-<span>
-<i class="bi bi-key-fill me-2"></i>
-{{ cred.name }}
-<small class="text-muted ms-2">{{ cred.created_at|date('Y-m-d') }}</small>
-</span>
-<form action="{{ linker({'section':'index','action':'webauthn_delete_credential'}) }}" method="post" class="d-inline">
-<input type="hidden" name="csrf_token" value="{{ csrf_token }}"/>
-<input type="hidden" name="page" value="{{ page }}"/>
-<input type="hidden" name="send" value="send"/>
-<input type="hidden" name="credential_id" value="{{ cred.id }}"/>
-<button class="btn btn-sm btn-outline-danger" type="submit" onclick="return confirm('{{ lng('2fa.2fa_fido2_confirm_delete') }}')">
-<i class="bi bi-trash"></i>
-</button>
-</form>
-</li>
-{% endfor %}
-</ul>
-{% endif %}
-
-{# Add new security key #}
-<div id="webauthn-register-area">
-<div class="mb-3">
-<label for="webauthn_key_name" class="form-label">{{ lng('2fa.2fa_fido2_key_name') }}</label>
-<input type="text" id="webauthn_key_name" class="form-control" maxlength="100" placeholder="{{ lng('2fa.2fa_fido2_key_name_placeholder') }}"/>
-</div>
-<button class="btn btn-primary" id="webauthn_register_btn" type="button">
-<i class="bi bi-plus-lg me-1"></i>{{ lng('2fa.2fa_fido2_add_key') }}
-</button>
-<div id="webauthn_status" class="mt-2"></div>
-</div>
-</div>
-<div class="card-body d-grid gap-2">
-<form action="{{ linker({'section':'index','action':'delete'}) }}" method="post">
-<input type="hidden" name="csrf_token" value="{{ csrf_token }}"/>
-<input type="hidden" name="page" value="{{ page }}"/>
-<input type="hidden" name="send" value="send"/>
-<button class="btn btn-warning w-100" type="submit">
-{{ lng('2fa.2fa_delete') }}
-</button>
-</form>
-</div>
-</div>
-</div>
-
-<script>
-document.getElementById('webauthn_register_btn').addEventListener('click', async () => {
-const statusEl = document.getElementById('webauthn_status');
-const keyName  = document.getElementById('webauthn_key_name').value.trim() || 'Security Key';
-statusEl.innerHTML = '';
-
-try {
-// Step 1: get creation options from server
-const beginResp = await fetch('ajax.php', {
-method: 'POST',
-headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-body: new URLSearchParams({
-action: 'webauthn_register_begin',
-csrf_token: '{{ csrf_token }}'
-})
-});
-if (!beginResp.ok) throw new Error(await beginResp.text());
-const options = await beginResp.json();
-if (options.error) throw new Error(options.error);
-
-// Decode base64url fields expected by the browser API
-options.challenge = base64urlDecode(options.challenge.data ?? options.challenge);
-options.user.id   = base64urlDecode(options.user.id.data ?? options.user.id);
-if (options.excludeCredentials) {
-options.excludeCredentials = options.excludeCredentials.map(c => ({
-...c, id: base64urlDecode(c.id.data ?? c.id)
-}));
-}
-
-// Step 2: invoke the authenticator
-const credential = await navigator.credentials.create({ publicKey: options });
-
-// Step 3: send result to server
-const completeResp = await fetch('ajax.php', {
-method: 'POST',
-headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-body: new URLSearchParams({
-action: 'webauthn_register_complete',
-csrf_token: '{{ csrf_token }}',
-key_name: keyName,
-clientDataJSON:    base64encode(credential.response.clientDataJSON),
-attestationObject: base64encode(credential.response.attestationObject),
-id: credential.id,
-})
-});
-const result = await completeResp.json();
-if (result.error) throw new Error(result.error);
-
-statusEl.innerHTML = '<div class="alert alert-success">{{ lng('2fa.2fa_fido2_key_added') }}</div>';
-setTimeout(() => location.reload(), 1500);
-} catch (err) {
-statusEl.innerHTML = '<div class="alert alert-danger">' + escHtml(err.message) + '</div>';
-}
-});
-
-function base64urlDecode(b64) {
-const b = b64.replace(/-/g, '+').replace(/_/g, '/');
-const bin = atob(b);
-return Uint8Array.from(bin, c => c.charCodeAt(0));
-}
-function base64encode(buf) {
-return btoa(String.fromCharCode(...new Uint8Array(buf)));
-}
-function escHtml(str) {
-return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-</script>
-{% endif %}
-
-</div>
-</div>
+					<div class="card-body d-grid gap-2">
+						<input type="hidden" name="csrf_token" value="{{ csrf_token }}"/>
+						<input type="hidden" name="page" value="{{ page }}"/>
+						<input type="hidden" name="send" value="send"/>
+						{% if userinfo.type_2fa == 0 %}
+							<button class="btn btn-primary" type="submit" name="preadd">
+								{{ lng('2fa.2fa_add') }}</button>
+						{% elseif userinfo['2fa_unsaved'] is defined and userinfo['2fa_unsaved'] %}
+							<button class="btn btn-primary" type="submit" name="add">
+								{{ lng('2fa.2fa_add') }}</button>
+						{% else %}
+							<button class="btn btn-warning" type="submit" name="delete">
+								{{ lng('2fa.2fa_delete') }}</button>
+						{% endif %}
+					</div>
+				</div>
+			</form>
+		</div>
+	</div>
 {% endblock %}

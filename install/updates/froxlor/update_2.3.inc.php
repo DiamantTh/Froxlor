@@ -184,23 +184,3 @@ if (Froxlor::isFroxlorVersion('2.3.2')) {
 	Update::showUpdateStep("Updating from 2.3.2 to 2.3.3", false);
 	Froxlor::updateToVersion('2.3.3');
 }
-
-if (Froxlor::isDatabaseVersion('202512280')) {
-Update::showUpdateStep("Adding table for WebAuthn/FIDO2 credentials");
-$sql = "CREATE TABLE IF NOT EXISTS `" . TABLE_PANEL_WEBAUTHN_CREDENTIALS . "` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `userid` int(11) NOT NULL,
-  `userid_type` enum('admin','customer') NOT NULL DEFAULT 'customer',
-  `credential_id` varchar(512) NOT NULL,
-  `public_key` text NOT NULL,
-  `sign_count` int(11) unsigned NOT NULL DEFAULT 0,
-  `name` varchar(100) NOT NULL DEFAULT 'Security Key',
-  `created_at` int(11) unsigned NOT NULL DEFAULT 0,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `credential_id` (`credential_id`(255))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci;";
-Database::query($sql);
-Update::lastStepStatus(0);
-
-Froxlor::updateToDbVersion('202503190');
-}
